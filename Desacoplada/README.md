@@ -112,6 +112,12 @@ Tras lo anterior y como primer paso para la creación de la infraestructura de d
 
 Una vez ponga **CREATE_COMPLETE** se puede pasar al siguiente paso.
 
+Para este paso se va a proceder a preparar el *Proxy* de manera manual, para ello, se crea primeramente un Secreto desde la consola *Secrets Manager* de AWS, con el usuario postgres y la contraseña puesta anteriormente (entra123) y apuntando al endpoint de la Base de datos.
+
+Ahora, se ha de crear un grupo de seguridad para el proxy, para ello, acceder a la consola *VPC* de AWS, en el apartado de grupos de seguridad y crear uno con un nombre que lo diferencie y sin reglas de entrada (se pondrán una vez se lance el *stack* con las lambdas).
+
+Para crear el *Proxy* se ha de ir a la consola *Aurora and RDS* de AWS y en el apartado de *Proxies* darle a crear, asociarlo a la Base de datos, al secreto anteriormente creado, a las subredes privadas y al Security Group (quitar el *default*), como último paso importante, usar el LabRole existente. Copiar el endpoint del proxy y copiarlo en el apartado DBHost del [parametros_desacoplada.json](/Desacoplada/parametros_desacoplada.json).
+
 Para este paso es necesario crear el repositorio **ECR** que lance la aplicación a través de Docker, y para ello se han de utilizar los siguientes comandos (el número que aparece en algunos de ellos al principio de una cadena tal que "NÚMERO".dkr.):
 
 1. Crear los repositorios ECR (1 por cada lambda):
@@ -167,9 +173,7 @@ Para este paso es necesario crear el repositorio **ECR** que lance la aplicació
       --capabilities CAPABILITY_IAM
       ```
 
-Una vez el Stack lanzado ponga **CREATE_COMPLETE** y antes de dar por terminada la versión desacoplada, se va a crear un grupo de seguridad y el *Proxy* que se encargará de manejar los datos de la base de datos mediante las solicitudes de las lambdas. Para crear el grupo de seguiridad, se puede hacer directamente desde la consola de *EC2*, al grupo de seguridad de le ha de poner como grupo de entrada el de la aplicación recien lanzada y tras esto, en el apartado de la consola *Aurora RDS* llamado *Proxies* se crea el proxy con el grupo de seguridad y las subredes anteriormente mencionadas.
-
-Con todo lo anterior, se podrá entrar dentro de la aplicación final y gestionar los items (personas) haciendo peticiones a la API de CREATE, READ, UPDATE y DELETE pero con una infraestructurea gestionada de manera desacoplada.
+Una vez el Stack lanzado ponga **CREATE_COMPLETE** y se ha de obtener el ID del grupo de seguridad de las Lambdas en el apartado de recursos del stack, copiar dicho ID y volver al proxy, editar las reglas de entrada y añadir regla con conexión de tipo **PostgreSQL** (puerto 5432) y poner de origen el ID del grupo de seguridad de las lambdas. Guardar y acceder desde el [frontend.html](/Desacoplada/frontend.html) poniendo el endpoint del Stack (ubicado en la salida del mismo en *CloudFormation*) y la clave de la API (ubicada en *API Gateway*, calves de api).
 
 ## PRESUPUESTO Y GASTOS DE LA INFRAESTRUCTURA
 
