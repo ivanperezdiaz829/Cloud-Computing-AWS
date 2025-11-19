@@ -1,4 +1,4 @@
 *.env
 *.sh
-.vscode/
+.vscode
 __pycache__/
