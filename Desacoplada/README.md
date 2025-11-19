@@ -19,7 +19,7 @@ Versión desacoplada de la infraestructura con un diseño basado en lambdas (4 d
 
 - **API Gateway (REST)**: Expone los recursos `items` e `item` (Personas individuales o en grupo) y enruta al backend vía VPC Link. Protegido con API Key.
 - **Proxy**: Gestiona las peticiones a la base de datos y controla el tráfico de las peticiones de las lambdas.
-- **4 lambdas**: Cada una posee su propio Dockerfile y .
+- **4 lambdas**: Cada una posee su propio Dockerfile y código de python.
 - **Base de datos**: PostgreSQL (Amazon RDS) en el VPC, con SG de acceso al puerto 5432.
 - **Amazon ECR**: Repositorio para la imagen del contenedor de Docker.
 

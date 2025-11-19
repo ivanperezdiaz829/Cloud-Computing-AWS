@@ -79,7 +79,7 @@ Acoplada
 La API posee los siguientes métodos para realizar peticiones mediante la aplicación.
 
   - **PostItemsMethod:** Crea nuevos items (Personas) con los parámetros que los componen.
-  - **GetItemsMethod:** Obtiene todas los items (Obtiene lista de personas).
+  - **GetItemsMethod:** Obtiene todos los items (Obtiene lista de personas).
   - **GetItemMethod:** Obtiene un solo item (Obtiene Persona).
   - **PutItemMethod:** Modifica el item seleccionado (Edita Persona).
   - **DeleteItemMethod:** Elimina el item seleccionado (Elimina Persona).
