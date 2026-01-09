@@ -4,7 +4,7 @@ Versión Acoplada de una infraestuctura con base de datos PostgreSQL y que crea 
 
 <h3 style="text-weight: bold">Diagrama de la Infraestructura:</h3>
 
-<img src="/Acoplada/Diagrama_Acoplada.jpeg">
+<img src="/Acoplada/Diagrama_Acoplada.jpeg"> 
 
 ## ÍNDICE
 
