@@ -1,15 +1,15 @@
 [
   {
     "ParameterKey": "VpcId",
-    "ParameterValue": "vpc-02ed0e03850283f55"
+    "ParameterValue": "vpc-044ca0356c7471e65"
   },
   {
     "ParameterKey": "SubnetIds",
-    "ParameterValue": "subnet-067c3b23bb410d5a3,subnet-067a56fd05153338f"
+    "ParameterValue": "subnet-0466c2638c5f97d4a,subnet-04c3da01c03981e90"
   },
   {
     "ParameterKey": "DBHost",
-    "ParameterValue": "items-proxy.proxy-cw1iltfagg88.us-east-1.rds.amazonaws.com"
+    "ParameterValue": "items-postgres-db.cw1iltfagg88.us-east-1.rds.amazonaws.com"
   },
   {
     "ParameterKey": "DBName",

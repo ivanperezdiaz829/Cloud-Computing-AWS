@@ -1,82 +1,116 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: "RDS PostgreSQL"
 
+# ============================================================================
+# PARAMETROS
+# Variables que el usuario debe introducir al lanzar la plantilla.
+# ============================================================================
 Parameters:
   VpcId:
     Type: AWS::EC2::VPC::Id
-    Description: VPC for DB
+    Description: ID de la VPC donde se alojara la base de datos.
 
   SubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
-    Description: Subnets (min 2)
+    Description: Lista de subredes. 
+    # IMPORTANTE: Para alta disponibilidad (Multi-AZ), AWS exige al menos 2 subredes en diferentes zonas de disponibilidad.
+    # Si estas subredes son "Publicas" y se activa PubliclyAccessible, la DB sera publica.
+
+  # Variable para el rango CIDR de la VPC
+  VpcCidr:
+    Type: String
+    Description: "Rango CIDR de la VPC para restringir el trafico"
+    Default: "172.31.0.0/16"
 
   DBName:
     Type: String
     Default: itemsdb
-    Description: DB Name
+    Description: El nombre logico de la base de datos que se creara dentro de PostgreSQL.
 
   DBUser:
     Type: String
     Default: postgres
-    Description: Master User
+    Description: Nombre del usuario administrador (Master User).
 
   DBPassword:
     Type: String
-    NoEcho: true
+    NoEcho: true # SEGURIDAD: Esto hace que la contrasenia se muestre como asteriscos (****) en la consola de AWS.
     MinLength: 8
-    Description: Master User Password
-    
+    Description: Contrasenia del usuario administrador.
+
+# ============================================================================
+# RECURSOS
+# La infraestructura real que se va a crear.
+# ============================================================================
 Resources:
+
+  # 1. SECURITY GROUP (El Firewall de la Base de Datos)
+  # ----------------------------------------------------------------------
   DBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Security group for RDS PostgreSQL
       VpcId: !Ref VpcId
       SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 5432
+        - IpProtocol: tcp       # Protocolo de red
+          FromPort: 5432        # Puerto estandar de PostgreSQL
           ToPort: 5432
-          CidrIp: 0.0.0.0/0
+          CidrIp: !Ref VpcCidr  # Permite trafico desde dentro de la VPC
 
+  # 2. SUBNET GROUP (Agrupacion de Redes)
+  # ----------------------------------------------------------------------
+  # Define en que zonas de la VPC puede ubicarse la base de datos.
   DBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
       DBSubnetGroupName: items-db-subnet-group
       DBSubnetGroupDescription: Subnet group for items PostgreSQL database
-      SubnetIds: !Ref SubnetIds
+      SubnetIds: !Ref SubnetIds # Las subredes elegidas en los parametros
 
+  # 3. INSTANCIA DE BASE DE DATOS (El Servidor RDS)
+  # ----------------------------------------------------------------------
   PostgresDBInstance:
     Type: AWS::RDS::DBInstance
     Properties:
-      DBInstanceIdentifier: items-postgres-db
-      Engine: postgres
-      EngineVersion: "17.6"
-      DBInstanceClass: db.t3.micro
-      AllocatedStorage: 20
-      StorageType: gp2
+      DBInstanceIdentifier: items-postgres-db   # Nombre visual en la consola de AWS
+      Engine: postgres              # Motor de base de datos
+      EngineVersion: "17.6"         # Version especifica (Asegurate de que AWS soporte esta version en tu region)
+      DBInstanceClass: db.t3.micro  # Tipo de servidor (CPU/RAM). t3.micro es capa gratuita (2 vCPU, 1GB RAM).
+      AllocatedStorage: 20          # Tamanio del disco duro en GB.
+      StorageType: gp2              # Tipo de disco SSD (General Purpose).
+      
+      # Credenciales y configuracion inicial
       DBName: !Ref DBName
       MasterUsername: !Ref DBUser
       MasterUserPassword: !Ref DBPassword
+      
+      # Configuracion de Red y Firewall
       VPCSecurityGroups:
         - !Ref DBSecurityGroup
       DBSubnetGroupName: !Ref DBSubnetGroup
-      PubliclyAccessible: true
-      BackupRetentionPeriod: 0
-      DeletionProtection: false
+      PubliclyAccessible: false # Solo permite acceso desde dentro de la VPC
+      
+      # Configuracion de Mantenimiento y Seguridad de Datos
+      BackupRetentionPeriod: 0  # RIESGO: 0 desactiva los backups automaticos. Si se rompe, se pierde todo. CAMBIAR EN PRODUCCION.
+      DeletionProtection: false # RIESGO: Permite borrar la DB sin confirmacion extra. CAMBIAR EN PRODUCCION.
 
+# ============================================================================
+# OUTPUTS
+# Valores que devuelve CloudFormation al terminar. utiles para conectar la App.
+# ============================================================================
 Outputs:
   DBEndpoint:
-    Description: PostgreSQL Endpoint
-    Value: !GetAtt PostgresDBInstance.Endpoint.Address
+    Description: La direccion URL (DNS) para conectarse a la base de datos.
+    Value: !GetAtt PostgresDBInstance.Endpoint.Address # Ejemplo: items-db.xg54...us-east-1.rds.amazonaws.com
 
   DBPort:
-    Description: DB PORT
-    Value: !GetAtt PostgresDBInstance.Endpoint.Port
+    Description: El puerto de conexion.
+    Value: !GetAtt PostgresDBInstance.Endpoint.Port # Sera 5432
 
   DBName:
-    Description: DB NAME
+    Description: Nombre de la base de datos creada.
     Value: !Ref DBName
 
   DBUser:
-    Description: DB USER
+    Description: Usuario maestro.
     Value: !Ref DBUser
