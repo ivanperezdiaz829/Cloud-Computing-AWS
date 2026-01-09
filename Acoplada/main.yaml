@@ -1,17 +1,26 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: "ECS Fargate + API Gateway REST API with API Key (con OPTIONS para CORS)"
+Description: "ECS Fargate + API Gateway REST API key"
 
+# ============================================================================
+# PARAMETROS: Variables de entrada que pedira CloudFormation al crear el stack.
+# ============================================================================
 Parameters:
   ImageName:
     Type: String
-    Description: ECR Image Name
-    Default: items-app:latest
+    Description: Nombre de la imagen Docker en ECR (Elastic Container Registry)-
+    Default: items-app:latest # Si no se escribe nada, este es el default.
   VpcId:
-    Type: AWS::EC2::VPC::Id
-    Description: VPC
+    Type: String
+    Description: ID de la red virtual (VPC) donde se desplegara la aplicacion.
   SubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
-    Description: At least 2 Subnets
+    Description: Lista de subredes (minimo 2 para alta disponibilidad) donde correran los contenedores.
+  # Se va a aniadir una ip para el VPC para poder bajar la imagen de Docker
+  VpcCidr:
+    Type: String
+    Description: "Rango CIDR de la VPC para restringir el trafico"
+    Default: "172.31.0.0/16"
+  # Variables de entorno para conectar la aplicacion a una Base de Datos
   DBType:
     Type: String
     Default: postgres
@@ -19,48 +28,49 @@ Parameters:
       - postgres
   DBHost:
     Type: String
-    Default: ""
-    Description: DB Host (only DBType=postgres)
+    Default: "items-postgres-db.cw1iltfagg88.us-east-1.rds.amazonaws.com" # ESTABLECER EL ENDPOINT DE LA BASE DE DATOS AQUI
+    Description: Direccion (Endpoint) de la base de datos.
   DBName:
     Type: String
     Default: ""
-    Description: DB Name (only DBType=postgres)
+    Description: Nombre de la base de datos.
   DBUser:
     Type: String
     Default: ""
-    Description: DB User (only DBType=postgres)
+    Description: Usuario para conectar a la base de datos.
   DBPass:
     Type: String
-    NoEcho: true
+    NoEcho: true # No se mostrara lo contrasenia en la consola de CloudFormation.
     Default: ""
-    Description: DB PASS (only DBType=postgres)
+    Description: Contrasenia para conectar a la base de datos.
 
 # ============================================================================
-# NETWORKING RESOURCES
+# RECURSOS: Componentes de infraestructura que se van a crear.
 # ============================================================================
 Resources:
+
+  # SECURITY GROUP PARA LA APLICACION ECS FARGATE
   ECSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Security group for ECS tasks
+      GroupDescription: Security Group for ECS Fargate tasks
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
-          FromPort: 8080
+          FromPort: 8080        # El puerto donde escucha la aplicacion
           ToPort: 8080
-          CidrIp: 0.0.0.0/0
-
-  # ============================================================================
-  # LOAD BALANCER RESOURCES
-  # ============================================================================
+          CidrIp: !Ref VpcCidr  # Solo acepta trafico del NLB dentro de la VPC
+  
+  # NETWORK LOAD BALANCER PARA LA APLICACION ECS FARGATE
   NLB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
       Name: items-nlb
-      Type: network
-      Scheme: internal
-      Subnets: !Ref SubnetIds
-
+      Type: network             # Tipo de red Capa 4 (TCP)
+      Scheme: internal          # No accesible desde internet directamente
+      Subnets: !Ref SubnetIds  
+    
+  # GRUPO DE DESTINP (TARGETGROUP) PARA EL NLB
   TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
@@ -68,10 +78,11 @@ Resources:
       Port: 8080
       Protocol: TCP
       VpcId: !Ref VpcId
-      TargetType: ip
-      HealthCheckProtocol: HTTP
-      HealthCheckPath: /health
-
+      TargetType: ip              # Necesario para Fargate en modo AWSVPC (Apunta a IPs provadas de contenedores)
+      HealthCheckProtocol: TCP   # El NLB comprobara la salud via HTTP
+      # HealthCheckPath: /health    # Ruta para la comprobacion de salud
+  
+  # LISTENER DEL NLB
   Listener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
@@ -81,32 +92,34 @@ Resources:
       LoadBalancerArn: !Ref NLB
       Port: 8080
       Protocol: TCP
-
-  # ============================================================================
-  # ECS RESOURCES
-  # ============================================================================
+    
+  # ECS (ELASTIC CONTAINER SERVICE) FARGATE CLUSTER
   ECSCluster:
     Type: AWS::ECS::Cluster
     Properties:
       ClusterName: items-cluster
-
+  
+  # ECS FARGATE TASK DEFINITION
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
-      Family: items-task
-      NetworkMode: awsvpc
+      Family: items-tasks
+      NetworkMode: awsvpc     # Cada tarea tiene su propia tarjeta de red en la VPC
       RequiresCompatibilities:
-        - FARGATE
-      Cpu: 256
-      Memory: 512
+        - FARGATE             # Tipo de servicio serverless de ECS
+      Cpu: 256                # 0.25 vCPU
+      Memory: 512             # 0.5 GB RAM
+      # Roles IAM para permisos de ejecucion y permisos en la propia tarea
       ExecutionRoleArn: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
       TaskRoleArn: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
       ContainerDefinitions:
         - Name: items-container
+          # Construye la URL de la imagen dinamicamente usando ID de cuenta y Region
           Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ImageName}"
           PortMappings:
             - ContainerPort: 8080
               Protocol: tcp
+          # Configuracion de logs de CloudWatch para ver que pasa por la consola
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -114,6 +127,7 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: items
               awslogs-create-group: "true"
+          # Inyecta los parametros de base de datos como variables de entorno
           Environment:
             - Name: DB_TYPE
               Value: !Ref DBType
@@ -123,208 +137,217 @@ Resources:
               Value: !Ref DBName
             - Name: DB_USER
               Value: !Ref DBUser
+            # IMPORTANTE: En produccion usar AWS Secrets Manager o Parameter Store para no mostrar la contrasenia
             - Name: DB_PASS
               Value: !Ref DBPass
-
+  
+  # ECS FARGATE SERVICE
   ECSService:
     Type: AWS::ECS::Service
-    DependsOn:
-      - Listener
+    DependsOn: 
+      - Listener  # Espera a que el Listener del NLB este listo
     Properties:
-      Cluster: !Ref ECSCluster
       ServiceName: items-service
+      Cluster: !Ref ECSCluster
       TaskDefinition: !Ref TaskDefinition
-      DesiredCount: 1
-      LaunchType: FARGATE
-      NetworkConfiguration:
+      DesiredCount: 1                       # Numero de tareas (contenedores) a ejecutar
+      LaunchType: FARGATE                   # Tipo serverless
+      NetworkConfiguration:                 # Configuracion de red para modo AWSVPC
         AwsvpcConfiguration:
-          AssignPublicIp: ENABLED
-          Subnets: !Ref SubnetIds
+          AssignPublicIp: ENABLED           # Hacer DISABLE en produccion usando Subredes privadas + NAT Gateway
+          Subnets: !Ref SubnetIds           # Subredes donde desplegar las tareas
           SecurityGroups:
-            - !Ref ECSSecurityGroup
+            - !Ref ECSSecurityGroup         # Asociar el Security Group creado
       LoadBalancers:
         - ContainerName: items-container
           ContainerPort: 8080
-          TargetGroupArn: !Ref TargetGroup
-
-  # ============================================================================
-  # API GATEWAY RESOURCES
-  # ============================================================================
+          TargetGroupArn: !Ref TargetGroup  # Asociar el Target Group del NLB
+  
+  # API GATEWAY REST API
+  # El puente que permite a API Gateway (publico) hablar con el NLB (privado)
   VPCLink:
     Type: AWS::ApiGateway::VpcLink
     Properties:
       Name: items-vpc-link
       TargetArns:
         - !Ref NLB
-
+  
+  # API GATEWAY REST API RESOURCE
   RestAPI:
     Type: AWS::ApiGateway::RestApi
     Properties:
       Name: items-api
-      Description: API para gestión de items
-
+      Description: API Gateway REST API to access ECS Fargate service
+  
+  # ITEMS RESOURCE EN API GATEWAY (/items)
   ItemsResource:
     Type: AWS::ApiGateway::Resource
     Properties:
-      RestApiId: !Ref RestAPI
       ParentId: !GetAtt RestAPI.RootResourceId
       PathPart: items
-
+      RestApiId: !Ref RestAPI
+  
+  # ITEMS RESOURCE EN API GATEWAY (/items/{id})
   ItemResource:
     Type: AWS::ApiGateway::Resource
     Properties:
-      RestApiId: !Ref RestAPI
       ParentId: !Ref ItemsResource
-      PathPart: "{id}"
-
-  # --- MÉTODOS CRUD ---
+      RestApiId: !Ref RestAPI
+      PathPart: "{id}"  # Variable de ruta
+  
+  # CRUD METHODS PARA /items Y /items/{id}
+  # POST /items
   PostItemsMethod:
     Type: AWS::ApiGateway::Method
     Properties:
-      RestApiId: !Ref RestAPI
-      ResourceId: !Ref ItemsResource
       HttpMethod: POST
+      ResourceId: !Ref ItemsResource
+      RestApiId: !Ref RestAPI
       AuthorizationType: NONE
-      ApiKeyRequired: true
+      ApiKeyRequired: true        # Requiere API Key
       Integration:
-        Type: HTTP_PROXY
+        Type: HTTP_PROXY          # Proxy HTTP directo al NLB
         IntegrationHttpMethod: POST
-        Uri: !Sub "http://${NLB.DNSName}:8080/items"
-        ConnectionType: VPC_LINK
+        Uri: !Sub "http://${NLB.DNSName}:8080/items"  # Destino: El DNS del NLB interno
+        ConnectionType: VPC_LINK  # Tipo de conexion privada
         ConnectionId: !Ref VPCLink
-
+    
+  # GET /items
   GetItemsMethod:
     Type: AWS::ApiGateway::Method
     Properties:
-      RestApiId: !Ref RestAPI
-      ResourceId: !Ref ItemsResource
       HttpMethod: GET
+      ResourceId: !Ref ItemsResource
+      RestApiId: !Ref RestAPI
       AuthorizationType: NONE
-      ApiKeyRequired: true
+      ApiKeyRequired: true        # Requiere API Key
       Integration:
-        Type: HTTP_PROXY
+        Type: HTTP_PROXY          # Proxy HTTP directo al NLB
         IntegrationHttpMethod: GET
-        Uri: !Sub "http://${NLB.DNSName}:8080/items"
-        ConnectionType: VPC_LINK
+        Uri: !Sub "http://${NLB.DNSName}:8080/items"  # Destino: El DNS del NLB interno
+        ConnectionType: VPC_LINK  # Tipo de conexion privada
         ConnectionId: !Ref VPCLink
-
+  
+  # GET /items/{id}
   GetItemMethod:
     Type: AWS::ApiGateway::Method
     Properties:
-      RestApiId: !Ref RestAPI
-      ResourceId: !Ref ItemResource
       HttpMethod: GET
+      ResourceId: !Ref ItemResource
+      RestApiId: !Ref RestAPI
       AuthorizationType: NONE
-      ApiKeyRequired: true
+      ApiKeyRequired: true            # Requiere API Key
       RequestParameters:
-        method.request.path.id: true
+        method.request.path.id: true  # Parametro de ruta obligatorio
       Integration:
-        Type: HTTP_PROXY
+        Type: HTTP_PROXY              # Proxy HTTP directo al NLB
         IntegrationHttpMethod: GET
-        Uri: !Sub "http://${NLB.DNSName}:8080/items/{id}"
-        ConnectionType: VPC_LINK
+        Uri: !Sub "http://${NLB.DNSName}:8080/items/{id}"  # Destino: El DNS del NLB interno
+        ConnectionType: VPC_LINK      # Tipo de conexion privada
         ConnectionId: !Ref VPCLink
         RequestParameters:
-          integration.request.path.id: method.request.path.id
-
+          integration.request.path.id: method.request.path.id  # Mapea el parametro de ruta
+    
+  # PUT /items/{id}
   PutItemMethod:
     Type: AWS::ApiGateway::Method
     Properties:
-      RestApiId: !Ref RestAPI
-      ResourceId: !Ref ItemResource
       HttpMethod: PUT
+      ResourceId: !Ref ItemResource
+      RestApiId: !Ref RestAPI
       AuthorizationType: NONE
-      ApiKeyRequired: true
+      ApiKeyRequired: true            # Requiere API Key
       RequestParameters:
-        method.request.path.id: true
+        method.request.path.id: true  # Parametro de ruta obligatorio
       Integration:
-        Type: HTTP_PROXY
+        Type: HTTP_PROXY              # Proxy HTTP directo al NLB
         IntegrationHttpMethod: PUT
-        Uri: !Sub "http://${NLB.DNSName}:8080/items/{id}"
-        ConnectionType: VPC_LINK
+        Uri: !Sub "http://${NLB.DNSName}:8080/items/{id}"  # Destino: El DNS del NLB interno
+        ConnectionType: VPC_LINK      # Tipo de conexion privada
         ConnectionId: !Ref VPCLink
         RequestParameters:
-          integration.request.path.id: method.request.path.id
-
+          integration.request.path.id: method.request.path.id  # Mapea el parametro de ruta
+  
+  # DELETE /items/{id}
   DeleteItemMethod:
     Type: AWS::ApiGateway::Method
     Properties:
-      RestApiId: !Ref RestAPI
-      ResourceId: !Ref ItemResource
       HttpMethod: DELETE
+      ResourceId: !Ref ItemResource
+      RestApiId: !Ref RestAPI
       AuthorizationType: NONE
-      ApiKeyRequired: true
+      ApiKeyRequired: true            # Requiere API Key
       RequestParameters:
-        method.request.path.id: true
+        method.request.path.id: true  # Parametro de ruta obligatorio
       Integration:
-        Type: HTTP_PROXY
+        Type: HTTP_PROXY              # Proxy HTTP directo al NLB
         IntegrationHttpMethod: DELETE
-        Uri: !Sub "http://${NLB.DNSName}:8080/items/{id}"
-        ConnectionType: VPC_LINK
+        Uri: !Sub "http://${NLB.DNSName}:8080/items/{id}"  # Destino: El DNS del NLB interno
+        ConnectionType: VPC_LINK      # Tipo de conexion privada
         ConnectionId: !Ref VPCLink
         RequestParameters:
-          integration.request.path.id: method.request.path.id
-
-  # --- MÉTODOS OPTIONS (PARA CORS) ---
+          integration.request.path.id: method.request.path.id  # Mapea el parametro de ruta
+  
+  # METODOS OPTIONS PARA CORS: Necesarios paraque un navegador web pueda llamar a la API (Cross-Origin Resource Sharing)
   OptionsItemsMethod:
     Type: AWS::ApiGateway::Method
     Properties:
-      RestApiId: !Ref RestAPI
-      ResourceId: !Ref ItemsResource
       HttpMethod: OPTIONS
+      ResourceId: !Ref ItemsResource
+      RestApiId: !Ref RestAPI
       AuthorizationType: NONE
-      ApiKeyRequired: false
+      ApiKeyRequired: false # El navegador no envia API key en las peticiones OPTIONS
       Integration:
-        Type: MOCK
+        Type: MOCK          # API Gateway responde directamente sin llamar al backend
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
         IntegrationResponses:
           - StatusCode: 200
             ResponseParameters:
-              method.response.header.Access-Control-Allow-Headers: "'Content-Type,x-api-key'"
+              method.response.header.Access-Control-Allow-Origin: "'*'" # Permite llamadas desde cualquier origen
               method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,x-api-key'"
             ResponseTemplates:
-              application/json: ""
-        RequestTemplates:
-          application/json: '{"statusCode": 200}'
+              application/json: ''
       MethodResponses:
         - StatusCode: 200
           ResponseParameters:
-            method.response.header.Access-Control-Allow-Headers: true
-            method.response.header.Access-Control-Allow-Methods: true
             method.response.header.Access-Control-Allow-Origin: true
-
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Headers: true
+    
+    # CORS para el recurso individfual /items/{id} (mismo que arriba)
   OptionsItemMethod:
     Type: AWS::ApiGateway::Method
     Properties:
-      RestApiId: !Ref RestAPI
-      ResourceId: !Ref ItemResource
       HttpMethod: OPTIONS
+      ResourceId: !Ref ItemResource
+      RestApiId: !Ref RestAPI
       AuthorizationType: NONE
-      ApiKeyRequired: false
+      ApiKeyRequired: false # El navegador no envia API key en las peticiones OPTIONS
       Integration:
-        Type: MOCK
+        Type: MOCK          # API Gateway responde directamente sin llamar al backend
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
         IntegrationResponses:
           - StatusCode: 200
             ResponseParameters:
-              method.response.header.Access-Control-Allow-Headers: "'Content-Type,x-api-key'"
+              method.response.header.Access-Control-Allow-Origin: "'*'" # Permite llamadas desde cualquier origen
               method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,x-api-key'"
             ResponseTemplates:
-              application/json: ""
-        RequestTemplates:
-          application/json: '{"statusCode": 200}'
+              application/json: ''
       MethodResponses:
         - StatusCode: 200
           ResponseParameters:
-            method.response.header.Access-Control-Allow-Headers: true
-            method.response.header.Access-Control-Allow-Methods: true
             method.response.header.Access-Control-Allow-Origin: true
-
-  # --- FIN DE MÉTODOS OPTIONS ---
-
-  APIDeployment:
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Headers: true
+  
+  # DESPLIEGUE DE LA API GATEWAY EN UNA STAGE
+  ApiDeployment:
     Type: AWS::ApiGateway::Deployment
-    DependsOn:
+    DependsOn:  # Se asegura de que todos los metodos esten creados antes de desplegar
       - PostItemsMethod
       - GetItemsMethod
       - GetItemMethod
@@ -335,43 +358,48 @@ Resources:
     Properties:
       RestApiId: !Ref RestAPI
 
-  APIStage:
+  # STAGE DE LA API GATEWAY
+  ApiStage:
     Type: AWS::ApiGateway::Stage
     Properties:
-      RestApiId: !Ref RestAPI
-      DeploymentId: !Ref APIDeployment
       StageName: prod
-
-  APIKey:
+      Description: Production stage
+      RestApiId: !Ref RestAPI
+      DeploymentId: !Ref ApiDeployment
+  
+  # API KEY PARA ACCEDER A LA API GATEWAY
+  ApiKey:
     Type: AWS::ApiGateway::ApiKey
     Properties:
       Name: items-api-key
       Enabled: true
 
+  # USAGE PLAN PARA LA API GATEWAY (CUOTAS Y LIMITES)
   UsagePlan:
     Type: AWS::ApiGateway::UsagePlan
-    DependsOn: APIStage
+    DependsOn: ApiStage
     Properties:
       UsagePlanName: items-usage-plan
       ApiStages:
         - ApiId: !Ref RestAPI
-          Stage: !Ref APIStage
-
+          Stage: !Ref ApiStage
+  
+  # ASOCIAR LA API KEY AL USAGE PLAN
   UsagePlanKey:
     Type: AWS::ApiGateway::UsagePlanKey
     Properties:
-      KeyId: !Ref APIKey
+      KeyId: !Ref ApiKey
       KeyType: API_KEY
       UsagePlanId: !Ref UsagePlan
 
 # ============================================================================
-# OUTPUTS
+# OUTPUTS: Valores de salida que muestra CloudFormation tras crear el stack.
 # ============================================================================
 Outputs:
   APIEndpoint:
-    Description: API Gateway URL
+    Description: "API Gateway Endpoint URL"
     Value: !Sub "https://${RestAPI}.execute-api.us-east-1.amazonaws.com/prod"
 
   APIKeyId:
-    Description: API Key ID
-    Value: !Ref APIKey
+    Description: "API Key ID to access the API"
+    Value: !Ref ApiKey

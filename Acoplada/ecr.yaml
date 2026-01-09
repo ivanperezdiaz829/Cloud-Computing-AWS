@@ -1,19 +1,35 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: "Items ECR Repository"
 
+# ============================================================================
+# PARAMETROS
+# ============================================================================
 Parameters:
   RepositoryName:
     Type: String
-    Default: items-app
-    Description: ECR repository name
+    Default: items-app # Nombre por defecto del repositorio.
+    Description: ECR repository name # Ejemplo: 123456789.dkr.ecr.us-east-1.amazonaws.com/items-app
 
+# ============================================================================
+# RECURSOS
+# ============================================================================
 Resources:
   ECRRepository:
     Type: AWS::ECR::Repository
     Properties:
       RepositoryName: !Ref RepositoryName
+      
+      # CONFIGURACION DE ESCANEO
       ImageScanningConfiguration:
+        # ScanOnPush: false
+        # No buscara vulnerabilidades (CVEs) automaticamente al subir la imagen.
+        # CONSECUENCIA: El despliegue es mas rapido, pero menos seguro. 
+        # En caso de subir una imagen con un fallo de seguridad conocido, no te enteraras.
+        # EN PRODUCCION: Poner en 'true'.
         ScanOnPush: false
+
+      # POLITICA DE CICLO DE VIDA (LIMPIEZA AUTOMATICA)
+      # Script JSON incrustado que define cuando borrar imagenes viejas.
       LifecyclePolicy:
         LifecyclePolicyText: |
           {
@@ -22,26 +38,36 @@ Resources:
                 "rulePriority": 1,
                 "description": "Mantain only last 2 images",
                 "selection": {
-                  "tagStatus": "any",
-                  "countType": "imageCountMoreThan",
-                  "countNumber": 2
+                  "tagStatus": "any",              # Aplica a TODAS las imagenes (tengan tag o no).
+                  "countType": "imageCountMoreThan", # Criterio: Cantidad de imagenes.
+                  "countNumber": 2                 # Limite: 2 imagenes.
                 },
                 "action": {
-                  "type": "expire"
+                  "type": "expire" # Accion: Borrar (expirar) las que sobren.
                 }
               }
             ]
           }
+          # EXPLICACION DE LA POLITICA:
+          # AWS solo guardara las 2 imagenes mas recientes que subas.
+          # EJEMPLO: Si subes la version 3, automaticamente borrara la version 1.
+          # VENTAZA: Ahorras dinero en almacenamiento (S3 subyacente de ECR).
+          # DESVENTAJA: Solo puedes hacer "rollback" (volver atras) una vez. 
+          # Si la version actual y la anterior fallan, no tienes la antepenultima.
 
+# ============================================================================
+# OUTPUTS
+# ============================================================================
 Outputs:
   RepositoryUri:
-    Description: ECR URI
+    Description: La URL completa necesaria para hacer 'docker push'.
+    # Ejemplo: 123456789.dkr.ecr.region.amazonaws.com/items-app
     Value: !GetAtt ECRRepository.RepositoryUri
 
   RepositoryName:
-    Description: Repository Name
+    Description: El nombre simple del repo.
     Value: !Ref RepositoryName
 
   RepositoryArn:
-    Description: Repository ARN
+    Description: El ID unico de Amazon para temas de permisos (IAM).
     Value: !GetAtt ECRRepository.Arn
