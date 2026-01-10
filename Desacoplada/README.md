@@ -18,9 +18,8 @@ Versión desacoplada de la infraestructura con un diseño basado en lambdas (4 d
 ## COMPONENTES PRINCIPALES
 
 - **API Gateway (REST)**: Expone los recursos `items` e `item` (Personas individuales o en grupo) y enruta al backend vía VPC Link. Protegido con API Key.
-- **Proxy**: Gestiona las peticiones a la base de datos y controla el tráfico de las peticiones de las lambdas.
-- **4 lambdas**: Cada una posee su propio Dockerfile y código de python.
-- **Base de datos**: PostgreSQL (Amazon RDS) en el VPC, con SG de acceso al puerto 5432.
+- **4 lambdas VPC**: Cada una posee su propio Dockerfile y código de python, están desplegadas directamente dentro de la VPC para tener conexión directa con la base de datos.
+- **Base de datos**: PostgreSQL (Amazon RDS) en el VPC, con SG que solo permite acceso interno de la VPC.
 - **Amazon ECR**: Repositorio para la imagen del contenedor de Docker.
 
 ## ESTRUCTURA DEL PROYECTO
@@ -108,17 +107,11 @@ Primeramente y para poder realizar pasos posteriores como el crear repositorios 
 
 4. Copiar toda la información que aparece en AWS CLI y pegarla dentro de la ruta `~/.aws/credentials`. Guardar lo anterior.
 
-Tras lo anterior y como primer paso para la creación de la infraestructura de desacoplada se procede a la creación de la base de datos, para ello y haciendo uso de la consola de *CloudFormation* se va a crear un nuevo stack cargando la plantilla [db_postgres.yaml](/Desacoplada/db_postgres.yaml) y poniendo como contraseña (necesario poner la misma para este proyecto dado que es uno de los parámetros del [parametros_desacoplada.json](/Desacoplada/parametros_desacoplada.json)) "entra123". Las subnets seleccionadas se han de guardar para ponerlas también en el mismo fichero [parametros_desacoplada.json](/Desacoplada/parametros_desacoplada.json) y también la VPC. Una vez realizados los pasos anteriores, se lanza el stack con la base de datos.
+Tras lo anterior y como primer paso para la creación de la infraestructura de desacoplada se procede a la creación de la base de datos, para ello y haciendo uso de la consola de *CloudFormation* se va a crear un nuevo stack cargando la plantilla [db_postgres.yaml](/Desacoplada/db_postgres.yaml) y poniendo como contraseña (necesario poner la misma para este proyecto dado que es uno de los parámetros del [parametros_desacoplada.json](/Desacoplada/parametros_desacoplada.json)) "entra123". Las subnets seleccionadas se han de guardar para ponerlas también en el mismo fichero [parametros_desacoplada.json](/Desacoplada/parametros_desacoplada.json) y la VPC. Una vez realizados los pasos anteriores, se lanza el stack con la base de datos.
 
-Una vez ponga **CREATE_COMPLETE** se puede pasar al siguiente paso.
+Una vez ponga **CREATE_COMPLETE** se ha de guardar el DBEndpoint para atribuirlo al campo DBHost del fichero [parametros_desacoplada.json](/Desacoplada/parametros_desacoplada.json).
 
-Para este paso se va a proceder a preparar el *Proxy* de manera manual, para ello, se crea primeramente un Secreto desde la consola *Secrets Manager* de AWS, con el usuario postgres y la contraseña puesta anteriormente (entra123) y apuntando al endpoint de la Base de datos.
-
-Ahora, se ha de crear un grupo de seguridad para el proxy, para ello, acceder a la consola *VPC* de AWS, en el apartado de grupos de seguridad y crear uno con un nombre que lo diferencie y sin reglas de entrada (se pondrán una vez se lance el *stack* con las lambdas).
-
-Para crear el *Proxy* se ha de ir a la consola *Aurora and RDS* de AWS y en el apartado de *Proxies* darle a crear, asociarlo a la Base de datos, al secreto anteriormente creado, a las subredes privadas y al Security Group (quitar el *default*), como último paso importante, usar el **LabRole** existente. Copiar el endpoint del proxy y copiarlo en el apartado **DBHost** del [parametros_desacoplada.json](/Desacoplada/parametros_desacoplada.json).
-
-Para este paso es necesario crear el repositorio **ECR** que lance la aplicación a través de Docker, y para ello se han de utilizar los siguientes comandos (el número que aparece en algunos de ellos al principio de una cadena tal que "NÚMERO".dkr.):
+Como último paso es necesario crear el repositorio **ECR** que lance la aplicación a través de Docker, y para ello se han de utilizar los siguientes comandos (el número que aparece en algunos de ellos al principio de una cadena tal que "NÚMERO".dkr.):
 
 1. Crear los repositorios ECR (1 por cada lambda):
 
@@ -173,7 +166,7 @@ Para este paso es necesario crear el repositorio **ECR** que lance la aplicació
       --capabilities CAPABILITY_IAM
       ```
 
-Una vez el Stack lanzado ponga **CREATE_COMPLETE** y se ha de obtener el ID del grupo de seguridad de las Lambdas en el apartado de recursos del stack, copiar dicho ID y volver al proxy, editar las reglas de entrada y añadir regla con conexión de tipo **PostgreSQL** (puerto 5432) y poner de origen el ID del grupo de seguridad de las lambdas. Guardar y acceder desde el [frontend.html](/Desacoplada/frontend.html) poniendo el endpoint del Stack (ubicado en la salida del mismo en *CloudFormation*) y la clave de la API (ubicada en *API Gateway*, calves de api).
+Una vez el Stack lanzado ponga **CREATE_COMPLETE** ya se puede acceder desde el [frontend.html](/Desacoplada/frontend.html) poniendo el endpoint del Stack (ubicado en la salida del mismo en *CloudFormation*) y la clave de la API (ubicada en *API Gateway*, claves de api).
 
 ## PRESUPUESTO Y GASTOS DE LA INFRAESTRUCTURA
 
@@ -181,23 +174,21 @@ La infraestructura lanzada no es gratis de mantener, teniendo un costo por uso o
 
 - **Precio e instancia de la Base de datos:** Se usa la **t3.micro** (temas de que es temporalmente gratis para la capa gratuita) que cuesta una cantidad de 0.0104$ por hora, 0.2496$ por día, 1.7472$ por semana, 6.9888$ por mes y 83.8656$ por año. En caso de no tener la capa gratuita que da cierto tiempo gratis, es mucho más económico usar otro tipo de instancia como la **t2.nano** o **t3.nano**. Con la **t2.nano** el precio sería: 0.0058$ por hora, 0.1392$ por día, 0.9744$ por semana, 3.8976$ por mes y 46.7712$ por año.
 
-- **Precio de las lambdas:** Las lambdas de por si no tienen un coste fijo sino que se empiezan a cobrar a partir del millón de invocaciones al mes (solo una lambda y en el plan gratuito).
-
-- **Proxy RDS:** Dependiendo de la máquina de la base de datos el precio del proxy cambia, en este caso, se va a suponer que se usa la t2.nano por lo que los costos quedarán tal que: 0.0116$ por hora, 0.2784$ por día, 1.9488$ por semana, 7.7952$ por mes y 93.5424$ por año.
+- **Precio de las lambdas:** Las lambdas de por si no tienen un coste fijo sino que se empiezan a cobrar a partir de los 400000 GB-segundos de cómputo al mes y 1 millón de peticiones. En el caso de no contar la capa gratuita y realizar 5 millones de visitas al mes (teniendo en cuanta la memoria de 256MB y duración promedio por ejecución de 0.2 segundos) y como ejemplo quedaría un precio de 0.0071$ por hora, 0.1723$ por día, 1.2063$ por semana, 5.1700$ por mes y 62.0400$ por año.
 
 - **Costos variables:** Adicionalmente, el proyecto tiene ciertos costos que son por el uso, son los siguientes:
   - API Gateway: Se paga por cada millón de peticiones al mes (con la capa gratuita, si no habría que especificar Quota y calcular los precios).
   - Transferencia de Datos: Cualquier dato que salga de AWS a Internet (ej. las respuestas de la API) tiene un costo.
 
-Por lo tanto, los precios totales de la infraestructura son los siguientes (para los cálculos se va a usar la t2.nano dado que sería la que usaría sin la capa gratuita):
+Por lo tanto, los precios totales de la infraestructura son los siguientes (para los cálculos se va a usar la t2.nano dado que sería la que usaría sin la capa gratuita) y suponiendo el cálculo anterior con las lambdas:
 
-- **Coste por hora global:** 0.0174$.
-- **Coste por día global:** 0.4176$.
-- **Coste por semana global:** 2.9232$.
-- **Coste por mes global:** 11.6928$.
-- **Coste por año global:** 140.3136$.
+- **Coste por hora global:** 0.0129$.
+- **Coste por día global:** 0.3115$.
+- **Coste por semana global:** 2.1807$.
+- **Coste por mes global:** 9.0676$.
+- **Coste por año global:** 108.8112$.
 
-**NOTA:** No se están contemplando los precios variables en el cálculo de los totales y se están tomando en cuenta los cálculos con la t2.nano (en el proyecto se usa la t3.micro que es gratis 12 meses con la capa gratuita).
+**NOTA:** No se están contemplando los costos variables en el cálculo de los totales y se están tomando en cuenta los cálculos con la t2.nano (en el proyecto se usa la t3.micro que es gratis 12 meses con la capa gratuita).
 
 ## FUENTES Y DOCUMENTACIÓN
 
